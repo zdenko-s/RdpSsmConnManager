@@ -8,6 +8,9 @@
 #define new DEBUG_NEW
 #endif
 
+#define IDC_RDP_CTRL_START   20000
+#define IDC_RDP_CTRL_END     20050 // Supports up to 50 concurrent sessions
+
 BEGIN_MESSAGE_MAP(CRdpSsmConnManagerDlg, CDialogEx)
     ON_WM_PAINT()
     ON_WM_SIZE()
@@ -18,6 +21,7 @@ BEGIN_MESSAGE_MAP(CRdpSsmConnManagerDlg, CDialogEx)
     ON_NOTIFY(TVN_SELCHANGED, 1001, &CRdpSsmConnManagerDlg::OnTvnSelchangedTreeRdg)
     //ON_WM_NCRBUTTONUP()
     ON_WM_CONTEXTMENU()
+    ON_WM_TIMER()
 END_MESSAGE_MAP()
 
 
@@ -316,10 +320,12 @@ void CRdpSsmConnManagerDlg::LoadRdgFile(const CString& strPath)
 CWnd* CRdpSsmConnManagerDlg::InitializeRdpControl(HWND hwndParent, const CRect& rect, int port)
 {
     CWnd* pWnd = CWnd::FromHandle(hwndParent);
-    if (!pWnd) return nullptr;
+    if (!pWnd)
+        return nullptr;
 
     LPUNKNOWN pUnk = pWnd->GetControlUnknown();
-    if (pUnk == nullptr) return nullptr;
+    if (pUnk == nullptr)
+        return nullptr;
 
     CComDispatchDriver rdpDisp(pUnk);
     CComVariant varServer(L"127.0.0.1");
@@ -413,6 +419,8 @@ void CRdpSsmConnManagerDlg::OnTvnSelchangedTreeRdg(NMHDR* pNMHDR, LRESULT* pResu
                     InitializeRdpControl(pNewWnd->GetSafeHwnd(), rectVisibleZone, nSelectedPort);
                     m_mapSessions.SetAt(hSelected, pNewWnd);
                     m_pActiveRdpWnd = pNewWnd;
+
+                    SetTimer(IDC_RDP_CTRL_START, 1000, nullptr); // Triggers once every 1000ms (1 second)
                 }
                 else
                 {
@@ -557,42 +565,6 @@ BOOL CRdpSsmConnManagerDlg::OnSetCursor(CWnd* pWnd, UINT nHitTest, UINT message)
     return CDialogEx::OnSetCursor(pWnd, nHitTest, message);
 }
 
-/*
-void CRdpSsmConnManagerDlg::OnNcRButtonUp(UINT nHitTest, CPoint point) {
-    if (nHitTest == HTCAPTION) {
-        if (m_mapSessions.IsEmpty()) return;
-
-        CMenu popMenu;
-        popMenu.CreatePopupMenu();
-
-        HTREEITEM hKeyItem = NULL;  // Matching your map's KEY type
-        CWnd* pValueWnd = nullptr;  // Matching your map's VALUE type
-        POSITION pos = m_mapSessions.GetStartPosition();
-
-        UINT menuID = IDM_SWITCH_SESSIONS_START;
-
-        while (pos != NULL && menuID <= IDM_SWITCH_SESSIONS_END) {
-            m_mapSessions.GetNextAssoc(pos, hKeyItem, pValueWnd);
-
-            // Fetch the human-readable server name string directly from the tree node
-            CString sServerName = m_wndTree.GetItemText(hKeyItem);
-
-            UINT flags = MF_STRING;
-            if (pValueWnd == m_pActiveRdpWnd) {
-                flags |= MF_CHECKED;
-            }
-
-            popMenu.AppendMenu(flags, menuID, sServerName);
-            menuID++;
-        }
-
-        popMenu.TrackPopupMenu(TPM_LEFTALIGN | TPM_RIGHTBUTTON, point.x, point.y, this);
-        return;
-    }
-
-    CDialogEx::OnNcRButtonUp(nHitTest, point);
-}
-*/
 
 BOOL CRdpSsmConnManagerDlg::OnCommand(WPARAM wParam, LPARAM lParam) {
     UINT nID = LOWORD(wParam);
@@ -662,21 +634,16 @@ BOOL CRdpSsmConnManagerDlg::OnCommand(WPARAM wParam, LPARAM lParam) {
 
 void CRdpSsmConnManagerDlg::OnContextMenu(CWnd* pWnd, CPoint point)
 {
-    // 1. Determine exactly what region of the dialog window was clicked
-    // Convert screen cursor points back to window tracking points
-    CPoint clientPt = point;
-    ScreenToClient(&clientPt);
-
-    // Check if the click coordinates hit the native Window Title Bar / Caption area
     auto nHitTest = SendMessage(WM_NCHITTEST, 0, MAKELPARAM(point.x, point.y));
 
     if (nHitTest == HTCAPTION)
     {
-        // If no background tunnels are running, do nothing (or fallback to standard menu)
+        printf("[RDP-MENU] Title bar right-clicked. Map has %d items.\n", (int)m_mapSessions.GetCount());
+
         if (m_mapSessions.IsEmpty()) return;
 
         CMenu popMenu;
-        popMenu.CreatePopupMenu(); //
+        popMenu.CreatePopupMenu();
 
         HTREEITEM hKeyItem = NULL;
         CWnd* pValueWnd = nullptr;
@@ -684,31 +651,219 @@ void CRdpSsmConnManagerDlg::OnContextMenu(CWnd* pWnd, CPoint point)
 
         UINT menuID = IDM_SWITCH_SESSIONS_START;
 
-        // Populate your open background tunnels inside your CMap
         while (pos != NULL && menuID <= IDM_SWITCH_SESSIONS_END)
         {
             m_mapSessions.GetNextAssoc(pos, hKeyItem, pValueWnd);
-
-            // Fetch the server name dynamically from your tree using the key handle
             CString sServerName = m_wndTree.GetItemText(hKeyItem);
 
+            printf("[RDP-MENU] Injecting item into switcher list menu: '%s' (ID: %u)\n", (LPCSTR)CT2A(sServerName), menuID);
+
             UINT flags = MF_STRING;
-            // Place a checkmark next to the active view pane
             if (pValueWnd == m_pActiveRdpWnd)
             {
                 flags |= MF_CHECKED;
             }
 
-            popMenu.AppendMenu(flags, menuID, sServerName); //
+            popMenu.AppendMenu(flags, menuID, sServerName);
             menuID++;
         }
 
-        // 2. Display your custom view switcher directly under the user's cursor
-        popMenu.TrackPopupMenu(TPM_LEFTALIGN | TPM_RIGHTBUTTON, point.x, point.y, this); //
-
-        return; // <-- CRITICAL: Stops message routing so the default System Menu is BLOCKED
+        popMenu.TrackPopupMenu(TPM_LEFTALIGN | TPM_RIGHTBUTTON, point.x, point.y, this);
+        return;
     }
 
-    // Pass right-clicks on other sections (like inside the tree) to the baseline default handler
     CDialogEx::OnContextMenu(pWnd, point);
+}
+
+void CRdpSsmConnManagerDlg::OnRdpDisconnected(UINT nID, long discReason)
+{
+    if (m_mapSessions.IsEmpty())
+        return;
+
+    HTREEITEM hTargetKeyItem = NULL;
+    CWnd* pTargetValueWnd = nullptr;
+    bool bFound = false;
+
+    // 1. Scan your CMap to identify which tree node owns this specific control ID
+    POSITION pos = m_mapSessions.GetStartPosition();
+    while (pos != NULL)
+    {
+        m_mapSessions.GetNextAssoc(pos, hTargetKeyItem, pTargetValueWnd);
+        if (pTargetValueWnd && pTargetValueWnd->GetSafeHwnd() && pTargetValueWnd->GetDlgCtrlID() == (int)nID)
+        {
+            bFound = true;
+            break;
+        }
+    }
+
+    if (bFound && pTargetValueWnd != nullptr)
+    {
+        // 2. Revert the tree control state flag back to default (clears color highlights)
+        if (hTargetKeyItem != NULL)
+        {
+            m_wndTree.SetItemData(hTargetKeyItem, 0);
+        }
+
+        // 3. Purge the track record from your map
+        m_mapSessions.RemoveKey(hTargetKeyItem);
+
+        // 4. Update the active view manager focus pointer if the closed session was on screen
+        if (pTargetValueWnd == m_pActiveRdpWnd)
+        {
+            m_pActiveRdpWnd = nullptr;
+
+            // Fallback focus automatically to the first available remaining background connection
+            if (!m_mapSessions.IsEmpty())
+            {
+                HTREEITEM hFallbackKey = NULL;
+                CWnd* pFallbackWnd = nullptr;
+                POSITION fallbackPos = m_mapSessions.GetStartPosition();
+                m_mapSessions.GetNextAssoc(fallbackPos, hFallbackKey, pFallbackWnd);
+
+                if (pFallbackWnd && hFallbackKey)
+                {
+                    // Trigger a layout calculation refresh to pull the fallback window into view
+                    m_pActiveRdpWnd = pFallbackWnd;
+                    CRect clientRect;
+                    GetClientRect(&clientRect);
+                    RearrangeControls(clientRect.Width(), clientRect.Height());
+
+                    m_wndTree.SelectItem(hFallbackKey);
+                    m_wndTree.EnsureVisible(hFallbackKey);
+                }
+            }
+        }
+
+        // 5. Terminate and delete the background memory allocation footprint cleanly
+        pTargetValueWnd->DestroyWindow();
+        delete pTargetValueWnd;
+
+        // Force tree canvas refresh to instantly clear out connection highlights
+        m_wndTree.Invalidate();
+    }
+}
+
+void CRdpSsmConnManagerDlg::OnTimer(UINT_PTR nIDEvent)
+{
+    if (nIDEvent == IDC_RDP_CTRL_START)
+    {
+        printf("[RDP-TIMER] Tick fired. Active sessions map count: %d\n", (int)m_mapSessions.GetCount());
+
+        if (m_mapSessions.IsEmpty())
+        {
+            printf("[RDP-TIMER] Map is completely empty. Disabling timer.\n");
+            KillTimer(IDC_RDP_CTRL_START);
+            return;
+        }
+
+        POSITION pos = m_mapSessions.GetStartPosition();
+
+        while (pos != nullptr)
+        {
+            HTREEITEM hKeyItem = NULL;  // Will receive the actual map key
+            CWnd* pWnd = nullptr;       // Will receive the window pointer value
+
+            // Standard MFC CMap traversal moves the 'pos' pointer forward automatically
+            m_mapSessions.GetNextAssoc(pos, hKeyItem, pWnd);
+
+            if (pWnd && ::IsWindow(pWnd->GetSafeHwnd()))
+            {
+                CString sServerName = m_wndTree.GetItemText(hKeyItem);
+                printf("[RDP-TIMER] Evaluating Server: '%s' (HWND: 0x%p)\n", (LPCSTR)CT2A(sServerName), pWnd->GetSafeHwnd());
+
+                LPUNKNOWN pUnk = pWnd->GetControlUnknown();
+                if (pUnk == nullptr)
+                {
+                    printf("[RDP-TIMER] WARNING: GetControlUnknown() returned NULL for '%s'. Skipping.\n", (LPCSTR)CT2A(sServerName));
+                    continue;
+                }
+
+                CComDispatchDriver rdpDisp(pUnk);
+                CComVariant varConnected;
+
+                HRESULT hr = rdpDisp.GetPropertyByName(L"Connected", &varConnected);
+                if (FAILED(hr))
+                {
+                    printf("[RDP-TIMER] ERROR: Failed to get 'Connected' property for '%s'. HRESULT: 0x%08X\n", (LPCSTR)CT2A(sServerName), hr);
+                    continue;
+                }
+
+                printf("[RDP-TIMER] '%s' raw Variant VT type: %d\n", (LPCSTR)CT2A(sServerName), varConnected.vt);
+
+                long nConnectedState = -1;
+                hr = VariantChangeType(&varConnected, &varConnected, 0, VT_I4);
+                if (SUCCEEDED(hr))
+                {
+                    nConnectedState = varConnected.lVal;
+                    printf("[RDP-TIMER] '%s' evaluated connection state value: %ld\n", (LPCSTR)CT2A(sServerName), nConnectedState);
+                }
+                else
+                {
+                    printf("[RDP-TIMER] ERROR: VariantChangeType failed for '%s'. HRESULT: 0x%08X\n", (LPCSTR)CT2A(sServerName), hr);
+                }
+
+                // If connection state registers as 0, the remote server logged off!
+                if (nConnectedState == 0)
+                {
+                    printf("[RDP-TIMER] !!! MATCH FOUND !!! Server '%s' reports disconnected. Triggering eviction...\n", (LPCSTR)CT2A(sServerName));
+
+                    // Trigger your safe cleanup handler
+                    HandleRemoteLogoff(hKeyItem, pWnd);
+
+                    // CRITICAL: Exit immediately! Modifying the map during iteration invalidates 'pos'
+                    // Returning here lets the next 1-second timer tick evaluate any remaining windows safely
+                    return;
+                }
+            }
+        }
+    }
+
+    CDialogEx::OnTimer(nIDEvent);
+}
+
+
+
+void CRdpSsmConnManagerDlg::HandleRemoteLogoff(HTREEITEM hDeadKey, CWnd* pDeadWnd)
+{
+    if (!pDeadWnd) return;
+
+    // 1. Clear text color / status highlight data from the tree node layout
+    m_wndTree.SetItemData(hDeadKey, 0);
+
+    // 2. Erase the tracking record association from your CMap
+    m_mapSessions.RemoveKey(hDeadKey);
+
+    // 3. Clear or swap active focus tracking window parameters
+    if (pDeadWnd == m_pActiveRdpWnd)
+    {
+        m_pActiveRdpWnd = nullptr; // Reset to empty baseline
+
+        // If there are other background connections remaining, bring the next one up
+        if (!m_mapSessions.IsEmpty())
+        {
+            HTREEITEM hFallbackKey = NULL;
+            CWnd* pFallbackWnd = nullptr;
+            POSITION fallbackPos = m_mapSessions.GetStartPosition();
+            m_mapSessions.GetNextAssoc(fallbackPos, hFallbackKey, pFallbackWnd);
+
+            if (pFallbackWnd)
+            {
+                m_pActiveRdpWnd = pFallbackWnd;
+
+                CRect clientRect;
+                GetClientRect(&clientRect);
+                RearrangeControls(clientRect.Width(), clientRect.Height());
+
+                m_wndTree.SelectItem(hFallbackKey);
+                m_wndTree.EnsureVisible(hFallbackKey);
+            }
+        }
+    }
+
+    // 4. Safely terminate the underlying window and clean its heap memory allocations
+    pDeadWnd->DestroyWindow();
+    delete pDeadWnd;
+
+    // 5. Force tree layout engine redraw to update colors instantly
+    m_wndTree.Invalidate();
 }

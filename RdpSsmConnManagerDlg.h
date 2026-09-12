@@ -29,6 +29,12 @@ protected:
     //afx_msg void OnNcRButtonUp(UINT nHitTest, CPoint point);
     afx_msg void OnContextMenu(CWnd* pWnd, CPoint point);
 
+    // Add the handler signature block for RDP event ID 4 (OnDisconnected)
+    afx_msg void OnRdpDisconnected(UINT nID, long discReason);
+
+    afx_msg void OnTimer(UINT_PTR nIDEvent);
+    void HandleRemoteLogoff(HTREEITEM hDeadKey, CWnd* pDeadWnd);
+
     DECLARE_MESSAGE_MAP()
 
 private:
