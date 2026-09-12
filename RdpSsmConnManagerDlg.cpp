@@ -847,9 +847,17 @@ void CRdpSsmConnManagerDlg::OnTimer(UINT_PTR nIDEvent)
 
                 if (nConnectedState == 0)
                 {
-                    if (m_bIsConnecting) continue; // Waiting on handshake, ignore state 0
+                    // --- CONNECTING SAFETY PROTECTION ---
+                    // If the unmanaged local loopback socket is still handshaking,
+                    // skip running eviction tasks so it doesn't drop the connection too early!
+                    if (m_bIsConnecting)
+                    {
+                        printf("[RDP-TIMER] Session initializing (State: 0). Waiting for tunnel socket stabilization...\n");
+                        continue;
+                    }
 
-                    printf("[RDP-TIMER] !!! DISCONNECT DETECTED !!! Evicting...\n");
+                    // Explicitly evict ONLY if the connection was fully stable, but then turned 0 (User Logoff)
+                    printf("[RDP-TIMER] !!! DISCONNECT DETECTED !!! Server reports closed. Evicting map entry...\n");
                     HandleRemoteLogoff(hKeyItem, pWnd);
                     return;
                 }
