@@ -1,6 +1,8 @@
 #pragma once
 #include <afxtempl.h>
 
+#include "AwsSsmTunnelManager.h" 
+
 #define IDM_SWITCH_SESSIONS_START   40100
 #define IDM_SWITCH_SESSIONS_END     40120  // Supports up to 20 open sessions
 
@@ -35,7 +37,7 @@ protected:
     afx_msg LRESULT OnPostInitializeRdp(WPARAM wParam, LPARAM lParam);
     afx_msg void OnNMClickTreeRdg(NMHDR* pNMHDR, LRESULT* pResult);
     afx_msg void OnNMDblclkTreeRdg(NMHDR* pNMHDR, LRESULT* pResult);
-
+    afx_msg void OnDestroy();
     void HandleRemoteLogoff(HTREEITEM hDeadKey, CWnd* pDeadWnd);
 
     DECLARE_MESSAGE_MAP()
@@ -69,4 +71,9 @@ private:
 
     enum { IDC_LAUNCH_DELAY_TIMER = 32500 }; // Unique ID for our 10ms kickstarter
 
+	// AWS SSM Tunnel Manager instance for handling session tunnels
+    CAwsSsmTunnelManager m_awsTunnelMgr; // Decoupled manager module instance
+
+    // Recursive cleanup helper for application shutdown memory tracking
+    void DeleteTreeItemDataRecursive(HTREEITEM hItem);
 };
