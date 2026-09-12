@@ -58,7 +58,6 @@ private:
     // Inside CRdpSsmConnManagerDlg class definition variables:
 private:
     bool      m_bTreeVisible = true;
-    bool      m_bIsConnecting = false;
     HTREEITEM m_hPendingSelectedNode = NULL;
     int       m_nPendingSelectedPort = 0;
     CRect     m_rectPendingZone;

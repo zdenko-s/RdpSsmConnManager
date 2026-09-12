@@ -420,7 +420,6 @@ void CRdpSsmConnManagerDlg::OnTvnSelchangedTreeRdg(NMHDR* pNMHDR, LRESULT* pResu
                 m_bTreeVisible = false;
 
                 // Temporarily bypass the connection safety flag so RearrangeControls can scale the layout
-                m_bIsConnecting = false;
                 RearrangeControls(rectClient.Width(), rectClient.Height());
 
                 // --- STEP B: COMPUTE TRUE MAXIMUM WALL-TO-WALL CANVAS BOUNDS ---
@@ -476,25 +475,34 @@ void CRdpSsmConnManagerDlg::OnSize(UINT nType, int cx, int cy)
 
 void CRdpSsmConnManagerDlg::RearrangeControls(int cx, int cy)
 {
+    // Ensure window structures are fully online before attempting adjustments
     if (!m_wndTree.GetSafeHwnd()) return;
 
-    // Rescale left tree panel
     int nTreeX = 0;
-    int nRdpLeft = 10 + m_nTreeWidth + m_nSplitterWidth;
+
+    // --- THE OVERLAY FIX ---
+    // The RDP window ALWAYS starts at the absolute left edge of the canvas,
+    // regardless of whether the tree is open or closed!
+    int nRdpLeft = 5;
 
     if (!m_bTreeVisible)
     {
+        // Slide the tree completely out of view to negative coordinates
         nTreeX = -m_nTreeWidth - 10;
-        nRdpLeft = 5;
+    }
+    else
+    {
+        // Tree slides directly on top of the RDP control at X = 0
+        nTreeX = 0;
     }
 
-    m_wndTree.MoveWindow(nTreeX, 10, m_nTreeWidth, cy - 20);
-
+    // Calculate maximum available canvas area width (Always full size!)
     int nRdpWidth = cx - nRdpLeft - 10;
     int nRdpHeight = cy - 20;
 
     if (nRdpWidth <= 0 || nRdpHeight <= 0) return;
 
+    // 1. Move the RDP session container windows first
     if (m_mapSessions.GetCount() > 0)
     {
         POSITION pos = m_mapSessions.GetStartPosition();
@@ -506,23 +514,24 @@ void CRdpSsmConnManagerDlg::RearrangeControls(int cx, int cy)
 
             if (pWnd && pWnd->GetSafeHwnd())
             {
-                // Freeze layout movements during the initial handshake step
-                if (m_bIsConnecting && pWnd == m_pActiveRdpWnd)
-                {
-                    continue;
-                }
-
                 if (pWnd == m_pActiveRdpWnd)
                 {
+                    // Scale the active window wall-to-wall
                     pWnd->MoveWindow(nRdpLeft, 10, nRdpWidth, nRdpHeight);
                 }
                 else
                 {
+                    // Park background sessions safely out of view
                     pWnd->MoveWindow(-32000, -32000, nRdpWidth, nRdpHeight);
                 }
             }
         }
     }
+
+    // 2. CRITICAL STEP: Move the tree panel LAST and force it to the top of the Z-order
+    // This ensures it floats directly on top of the RDP control instead of hiding behind it
+    m_wndTree.MoveWindow(nTreeX, 10, m_nTreeWidth, cy - 20);
+    m_wndTree.SetWindowPos(&CWnd::wndTop, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
 
@@ -560,11 +569,6 @@ void CRdpSsmConnManagerDlg::OnLButtonUp(UINT nFlags, CPoint point)
 
 void CRdpSsmConnManagerDlg::OnMouseMove(UINT nFlags, CPoint point)
 {
-    if (m_bIsConnecting)
-    {
-        CDialogEx::OnMouseMove(nFlags, point);
-        return;
-    }
 
     CRect rectClient;
     GetClientRect(&rectClient);
@@ -579,15 +583,6 @@ void CRdpSsmConnManagerDlg::OnMouseMove(UINT nFlags, CPoint point)
 
 BOOL CRdpSsmConnManagerDlg::OnSetCursor(CWnd* pWnd, UINT nHitTest, UINT message)
 {
-    // --- ADD THIS DEADLOCK PROTECTION GATE ---
-    // If an unmanaged local loopback socket handshake is actively running,
-    // immediately exit and touch nothing to ensure the message queue remains clear!
-    if (m_bIsConnecting)
-    {
-        return CDialogEx::OnSetCursor(pWnd, nHitTest, message);
-    }
-
-    // Your existing mouse-hover auto-hide calculation rules
     CPoint ptCursor;
     GetCursorPos(&ptCursor);
     ScreenToClient(&ptCursor);
@@ -595,12 +590,14 @@ BOOL CRdpSsmConnManagerDlg::OnSetCursor(CWnd* pWnd, UINT nHitTest, UINT message)
     CRect rectClient;
     GetClientRect(&rectClient);
 
+    // TRIGGER A: Mouse bumps the extreme left edge (<= 5px) -> Slide tree out as an overlay
     if (!m_bTreeVisible && ptCursor.x <= 5 && ptCursor.y >= 0 && ptCursor.y <= rectClient.Height())
     {
         m_bTreeVisible = true;
         RearrangeControls(rectClient.Width(), rectClient.Height());
     }
-    else if (m_bTreeVisible && ptCursor.x > (m_nTreeWidth + 30))
+    // TRIGGER B: Mouse moves out of the overlay area (> tree width + margin) -> Collapse tree back automatically
+    else if (m_bTreeVisible && ptCursor.x > (m_nTreeWidth + 20))
     {
         m_bTreeVisible = false;
         RearrangeControls(rectClient.Width(), rectClient.Height());
@@ -796,7 +793,6 @@ void CRdpSsmConnManagerDlg::OnTimer(UINT_PTR nIDEvent)
         CWnd* pTargetWnd = nullptr;
         if (m_mapSessions.Lookup(m_hPendingSelectedNode, pTargetWnd) && pTargetWnd != nullptr)
         {
-            m_bIsConnecting = true;
 
             this->KillTimer(IDC_RDP_CTRL_START);
             this->SetTimer(IDC_RDP_CTRL_START, 1000, nullptr);
@@ -839,22 +835,12 @@ void CRdpSsmConnManagerDlg::OnTimer(UINT_PTR nIDEvent)
                 }
 
                 // Connection is established and stable! Release safety layout lock flag
-                if (nConnectedState == 1 && m_bIsConnecting)
-                {
-                    printf("[RDP-TIMER] !!! CONNECTION LIVE AND STABLE !!!\n");
-                    m_bIsConnecting = false;
-                }
 
                 if (nConnectedState == 0)
                 {
                     // --- CONNECTING SAFETY PROTECTION ---
                     // If the unmanaged local loopback socket is still handshaking,
                     // skip running eviction tasks so it doesn't drop the connection too early!
-                    if (m_bIsConnecting)
-                    {
-                        printf("[RDP-TIMER] Session initializing (State: 0). Waiting for tunnel socket stabilization...\n");
-                        continue;
-                    }
 
                     // Explicitly evict ONLY if the connection was fully stable, but then turned 0 (User Logoff)
                     printf("[RDP-TIMER] !!! DISCONNECT DETECTED !!! Server reports closed. Evicting map entry...\n");
