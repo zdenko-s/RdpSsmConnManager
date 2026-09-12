@@ -19,6 +19,7 @@ protected:
     afx_msg void OnPaint();
     afx_msg void OnSize(UINT nType, int cx, int cy);
     afx_msg void OnTvnSelchangedTreeRdg(NMHDR* pNMHDR, LRESULT* pResult);
+    LRESULT WindowProc(UINT message, WPARAM wParam, LPARAM lParam) override;
 
     // Mouse capture events for tracking the custom divider line
     afx_msg void OnLButtonDown(UINT nFlags, CPoint point);
@@ -26,7 +27,6 @@ protected:
     BOOL OnCommand(WPARAM wParam, LPARAM lParam);
     //afx_msg void OnNcRButtonUp(UINT nHitTest, CPoint point);
     afx_msg void OnContextMenu(CWnd* pWnd, CPoint point);
-
     // Add the handler signature block for RDP event ID 4 (OnDisconnected)
     afx_msg void OnRdpDisconnected(UINT nID, long discReason);
     afx_msg void OnTimer(UINT_PTR nIDEvent);
@@ -35,6 +35,7 @@ protected:
     afx_msg LRESULT OnPostInitializeRdp(WPARAM wParam, LPARAM lParam);
     afx_msg void OnNMClickTreeRdg(NMHDR* pNMHDR, LRESULT* pResult);
     afx_msg void OnNMDblclkTreeRdg(NMHDR* pNMHDR, LRESULT* pResult);
+
     void HandleRemoteLogoff(HTREEITEM hDeadKey, CWnd* pDeadWnd);
 
     DECLARE_MESSAGE_MAP()
@@ -63,6 +64,9 @@ private:
     int       m_nPendingSelectedPort = 0;
     CRect     m_rectPendingZone;
 
+    bool m_bIsDraggingEdge = false; // Tracks if the user is currently resizing the tree
+    int  m_nMinTreeWidth = 150;     // Safety lower limit for tree size
+    int  m_nMaxTreeWidth = 600;     // Safety upper limit for tree size
 
     enum { IDC_LAUNCH_DELAY_TIMER = 32500 }; // Unique ID for our 10ms kickstarter
 

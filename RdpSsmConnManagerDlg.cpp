@@ -45,7 +45,10 @@ BEGIN_MESSAGE_MAP(CRdpSsmConnManagerDlg, CDialogEx)
     ON_MESSAGE(WM_POST_INITIALIZE_RDP, &CRdpSsmConnManagerDlg::OnPostInitializeRdp)
     ON_NOTIFY(NM_CLICK, IDC_TREE_RDG, &CRdpSsmConnManagerDlg::OnNMClickTreeRdg)
     ON_NOTIFY(NM_DBLCLK, IDC_TREE_RDG, &CRdpSsmConnManagerDlg::OnNMDblclkTreeRdg)
-
+    ON_WM_LBUTTONDOWN()
+    ON_WM_LBUTTONUP()
+    ON_WM_MOUSEMOVE()
+    ON_WM_SETCURSOR()
 END_MESSAGE_MAP()
 
 
@@ -545,14 +548,12 @@ void CRdpSsmConnManagerDlg::OnPaint()
 
 void CRdpSsmConnManagerDlg::OnLButtonDown(UINT nFlags, CPoint point)
 {
-    // Check if the user clicked inside the vertical gutter zone right next to the tree control
-    int nSplitterLeft = 10 + m_nTreeWidth;
-    int nSplitterRight = nSplitterLeft + m_nSplitterWidth;
-
-    if (point.x >= nSplitterLeft && point.x <= nSplitterRight)
+    // If tree is open and the click hits within 5 pixels of the right border
+    if (m_bTreeVisible && (point.x >= m_nTreeWidth - 5 && point.x <= m_nTreeWidth + 5))
     {
-        m_bDraggingSplitter = TRUE;
-        SetCapture(); // Lock mouse inputs directly to this window structure while dragging
+        m_bIsDraggingEdge = true;
+        SetCapture(); // Lock mouse inputs strictly to this dialog container frame
+        return;
     }
 
     CDialogEx::OnLButtonDown(nFlags, point);
@@ -560,26 +561,34 @@ void CRdpSsmConnManagerDlg::OnLButtonDown(UINT nFlags, CPoint point)
 
 void CRdpSsmConnManagerDlg::OnLButtonUp(UINT nFlags, CPoint point)
 {
-    if (m_bDraggingSplitter)
+    if (m_bIsDraggingEdge)
     {
-        m_bDraggingSplitter = FALSE;
-        ReleaseCapture(); // Give mouse tracking back to normal operations
+        printf("[MOUSE] Drag complete. Releasing window input locks.\n");
+        m_bIsDraggingEdge = false;
+        ReleaseCapture(); // Give mouse tracking controls back cleanly to the operating system loop
+        return;
     }
 
     CDialogEx::OnLButtonUp(nFlags, point);
 }
-
 void CRdpSsmConnManagerDlg::OnMouseMove(UINT nFlags, CPoint point)
 {
-
-    CRect rectClient;
-    GetClientRect(&rectClient);
-
-    if (m_bTreeVisible && point.x > (m_nTreeWidth + 30))
+    if (m_bIsDraggingEdge)
     {
-        m_bTreeVisible = false;
+        // Enforce safe structural layout resizing barriers
+        if (point.x < m_nMinTreeWidth) point.x = m_nMinTreeWidth;
+        if (point.x > m_nMaxTreeWidth) point.x = m_nMaxTreeWidth;
+
+        // Update the width variable dynamically in memory
+        m_nTreeWidth = point.x;
+
+        // Recalculate layout borders instantly on the fly
+        CRect rectClient;
+        GetClientRect(&rectClient);
         RearrangeControls(rectClient.Width(), rectClient.Height());
+        return;
     }
+
     CDialogEx::OnMouseMove(nFlags, point);
 }
 
@@ -592,13 +601,29 @@ BOOL CRdpSsmConnManagerDlg::OnSetCursor(CWnd* pWnd, UINT nHitTest, UINT message)
     CRect rectClient;
     GetClientRect(&rectClient);
 
-    // TRIGGER A: Mouse bumps the extreme left edge (<= 5px) -> Slide tree out as an overlay
+    // 1. RESIZE ZONE CHECK: If tree is visible, check if mouse is on its right edge (+/- 5 pixels)
+    if (m_bTreeVisible && (ptCursor.x >= m_nTreeWidth - 5 && ptCursor.x <= m_nTreeWidth + 5))
+    {
+        // Change the cursor to the classic horizontal resize arrow
+        ::SetCursor(::LoadCursor(NULL, IDC_SIZEWE));
+        return TRUE; // Intercept message routing to stop default cursor resets
+    }
+
+    // 2. DRAG SAFETY LOCK: If the user is actively dragging, lock the tree open and touch nothing
+    if (m_bIsDraggingEdge)
+    {
+        ::SetCursor(::LoadCursor(NULL, IDC_SIZEWE));
+        return TRUE;
+    }
+
+    // 3. AUTO-HIDE SLIDE TOGGLES: (Your existing edge-hover mechanics)
+    // Bumps extreme left edge -> Slide open
     if (!m_bTreeVisible && ptCursor.x <= 5 && ptCursor.y >= 0 && ptCursor.y <= rectClient.Height())
     {
         m_bTreeVisible = true;
         RearrangeControls(rectClient.Width(), rectClient.Height());
     }
-    // TRIGGER B: Mouse moves out of the overlay area (> tree width + margin) -> Collapse tree back automatically
+    // Moves out of the tree panel zone -> Collapse shut
     else if (m_bTreeVisible && ptCursor.x > (m_nTreeWidth + 20))
     {
         m_bTreeVisible = false;
@@ -1055,4 +1080,26 @@ void CRdpSsmConnManagerDlg::OnNMDblclkTreeRdg(NMHDR* pNMHDR, LRESULT* pResult)
             }
         }
     }
+}
+
+LRESULT CRdpSsmConnManagerDlg::WindowProc(UINT message, WPARAM wParam, LPARAM lParam)
+{
+    if (message == WM_LBUTTONDOWN)
+    {
+        // Convert the raw lParam window coordinates into a clean CPoint stack object
+        CPoint point(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+
+        // If the tree is visible and the cursor coordinates hit right on its sizing border edge (+/- 5px)
+        if (m_bTreeVisible && (point.x >= m_nTreeWidth - 5 && point.x <= m_nTreeWidth + 5))
+        {
+            printf("[WINDOWPROC] Intercepted edge click. Booting up drag matrix engine...\n");
+
+            m_bIsDraggingEdge = true;
+            SetCapture(); // Freeze mouse routing focus down to this main dialog shell frame
+
+            return 1; // Return 1 to tell Windows the message was handled, blocking it from the tree!
+        }
+    }
+
+    return CDialogEx::WindowProc(message, wParam, lParam);
 }
