@@ -60,6 +60,7 @@ CRdpSsmConnManagerDlg::CRdpSsmConnManagerDlg(CWnd* pParent /*=nullptr*/)
     m_bDraggingSplitter = FALSE; // Not dragging initially
     m_nSplitterWidth = 8;        // 8-pixel clickable buffer line gutter
     m_pActiveRdpWnd = nullptr;
+    m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
 }
 
 BOOL CRdpSsmConnManagerDlg::OnInitDialog()
@@ -81,6 +82,15 @@ BOOL CRdpSsmConnManagerDlg::OnInitDialog()
 
     m_wndTree.Create(WS_CHILD | WS_VISIBLE | WS_BORDER | TVS_HASLINES | TVS_LINESATROOT | TVS_HASBUTTONS,
         rectTree, this, IDC_TREE_RDG);
+
+    if (m_hIcon != NULL)
+    {
+        // Set big icon (used for Alt+Tab task switcher)
+        SetIcon(m_hIcon, TRUE);
+
+        // Set small icon (used directly on the title bar edge layout)
+        SetIcon(m_hIcon, FALSE);
+    }
 
     ParseCommandLineArgs();
     if (!m_strRdgPath.IsEmpty())
@@ -539,11 +549,29 @@ void CRdpSsmConnManagerDlg::RearrangeControls(int cx, int cy)
     m_wndTree.SetWindowPos(&CWnd::wndTop, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
-
 void CRdpSsmConnManagerDlg::OnPaint()
 {
-    CPaintDC dc(this);
-    CDialogEx::OnPaint();
+    if (IsIconic())
+    {
+        CPaintDC dc(this); // device context for painting
+
+        SendMessage(WM_ICONERASEBKGND, reinterpret_cast<WPARAM>(dc.GetSafeHdc()), 0);
+
+        // Center icon in client rectangle area
+        int cxIcon = GetSystemMetrics(SM_CXICON);
+        int cyIcon = GetSystemMetrics(SM_CYICON);
+        CRect rect;
+        GetClientRect(&rect);
+        int x = (rect.Width() - cxIcon + 1) / 2;
+        int y = (rect.Height() - cyIcon + 1) / 2;
+
+        // Draw the icon onto the canvas frame
+        dc.DrawIcon(x, y, m_hIcon);
+    }
+    else
+    {
+        CDialogEx::OnPaint();
+    }
 }
 
 void CRdpSsmConnManagerDlg::OnLButtonDown(UINT nFlags, CPoint point)

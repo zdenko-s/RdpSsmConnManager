@@ -40,6 +40,7 @@ protected:
 
     DECLARE_MESSAGE_MAP()
 
+    HICON m_hIcon; // Icon handle storage wrapper
 private:
     CTreeCtrl m_wndTree;
     CString   m_strRdgPath;
@@ -57,8 +58,6 @@ private:
     void RearrangeControls(int cx, int cy); // Helper to consolidate layout positions
     void SyncTreeSelection(const CString& serverName);
 
-    // Inside CRdpSsmConnManagerDlg class definition variables:
-private:
     bool      m_bTreeVisible = true;
     HTREEITEM m_hPendingSelectedNode = NULL;
     int       m_nPendingSelectedPort = 0;
