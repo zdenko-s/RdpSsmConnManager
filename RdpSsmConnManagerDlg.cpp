@@ -43,6 +43,8 @@ BEGIN_MESSAGE_MAP(CRdpSsmConnManagerDlg, CDialogEx)
     ON_WM_SETCURSOR()
     ON_WM_MOUSEMOVE()
     ON_MESSAGE(WM_POST_INITIALIZE_RDP, &CRdpSsmConnManagerDlg::OnPostInitializeRdp)
+    ON_NOTIFY(NM_CLICK, IDC_TREE_RDG, &CRdpSsmConnManagerDlg::OnNMClickTreeRdg)
+    ON_NOTIFY(NM_DBLCLK, IDC_TREE_RDG, &CRdpSsmConnManagerDlg::OnNMDblclkTreeRdg)
 
 END_MESSAGE_MAP()
 
@@ -75,7 +77,7 @@ BOOL CRdpSsmConnManagerDlg::OnInitDialog()
     CRect rectTree(10, 10, m_nTreeWidth, rectClient.Height() - 10);
 
     m_wndTree.Create(WS_CHILD | WS_VISIBLE | WS_BORDER | TVS_HASLINES | TVS_LINESATROOT | TVS_HASBUTTONS,
-        rectTree, this, 1001);
+        rectTree, this, IDC_TREE_RDG);
 
     ParseCommandLineArgs();
     if (!m_strRdgPath.IsEmpty())
@@ -921,4 +923,136 @@ LRESULT CRdpSsmConnManagerDlg::OnPostInitializeRdp(WPARAM wParam, LPARAM lParam)
         InitializeRdpControl(pTargetWnd->GetSafeHwnd(), rectVisibleZone, nPort);
     }
     return 0;
+}
+
+void CRdpSsmConnManagerDlg::OnNMClickTreeRdg(NMHDR* pNMHDR, LRESULT* pResult)
+{
+    *pResult = 0; // Default routing
+
+    // Find exactly what node was clicked under the mouse cursor
+    CPoint ptCursor;
+    GetCursorPos(&ptCursor);
+    m_wndTree.ScreenToClient(&ptCursor);
+
+    UINT flags = 0;
+    HTREEITEM hClickedItem = m_wndTree.HitTest(ptCursor, &flags);
+
+    // Ensure they clicked on the actual item label or icon text
+    if (hClickedItem != nullptr && (flags & (TVHT_ONITEMLABEL | TVHT_ONITEMICON)))
+    {
+        DWORD_PTR dwData = m_wndTree.GetItemData(hClickedItem);
+        int nPort = (int)dwData;
+
+        if (nPort > 0)
+        {
+            CWnd* pTargetRdpWnd = nullptr;
+
+            // VIEW SWITCH CHECK: If this connection is already active in background memory...
+            if (m_mapSessions.Lookup(hClickedItem, pTargetRdpWnd) && pTargetRdpWnd != nullptr)
+            {
+                if (pTargetRdpWnd != m_pActiveRdpWnd)
+                {
+                    printf("[SINGLE-CLICK] Session found open. Swapping viewport to active node...\n");
+
+                    CRect rectClient;
+                    GetClientRect(&rectClient);
+
+                    // 1. Teleport previous window off-screen to keep its state alive
+                    if (m_pActiveRdpWnd != nullptr)
+                    {
+                        m_pActiveRdpWnd->SetWindowPos(NULL, -32000, -32000, 0, 0, SWP_NOZORDER | SWP_NOSIZE);
+                    }
+
+                    // 2. Point tracker focus to our target session and hide tree overlay
+                    m_pActiveRdpWnd = pTargetRdpWnd;
+                    m_bTreeVisible = false;
+
+                    // 3. Layout engine shifts the tree away and renders target full screen instantly
+                    RearrangeControls(rectClient.Width(), rectClient.Height());
+                }
+                else
+                {
+                    // If they single-clicked the session they are already looking at, just tuck the tree overlay away
+                    m_bTreeVisible = false;
+                    CRect rectClient;
+                    GetClientRect(&rectClient);
+                    RearrangeControls(rectClient.Width(), rectClient.Height());
+                }
+            }
+        }
+    }
+}
+
+void CRdpSsmConnManagerDlg::OnNMDblclkTreeRdg(NMHDR* pNMHDR, LRESULT* pResult)
+{
+    *pResult = 0; // Default routing
+
+    CPoint ptCursor;
+    GetCursorPos(&ptCursor);
+    m_wndTree.ScreenToClient(&ptCursor);
+
+    UINT flags = 0;
+    HTREEITEM hClickedItem = m_wndTree.HitTest(ptCursor, &flags);
+
+    if (hClickedItem != nullptr && (flags & (TVHT_ONITEMLABEL | TVHT_ONITEMICON)))
+    {
+        DWORD_PTR dwData = m_wndTree.GetItemData(hClickedItem);
+        int nSelectedPort = (int)dwData;
+
+        if (nSelectedPort > 0)
+        {
+            CWnd* pTargetRdpWnd = nullptr;
+
+            // LAUNCH PROTECTION: Only open if a background channel does not exist yet!
+            if (!m_mapSessions.Lookup(hClickedItem, pTargetRdpWnd))
+            {
+                printf("[DOUBLE-CLICK] Spawning fresh isolated session instance container...\n");
+
+                CRect rectClient;
+                GetClientRect(&rectClient);
+
+                // Hide tree panel overlay layout bounds right at birth
+                m_bTreeVisible = false;
+                RearrangeControls(rectClient.Width(), rectClient.Height());
+
+                // Calculate full wall-to-wall canvas dimensions
+                int nRdpLeft = 5;
+                int nRdpWidth = rectClient.Width() - nRdpLeft - 10;
+                int nRdpHeight = rectClient.Height() - 20;
+
+                CRect rectFullWallToWall(nRdpLeft, 10, nRdpLeft + nRdpWidth, 10 + nRdpHeight);
+
+                CWnd* pNewWnd = new CWnd();
+
+                BOOL bCreated = pNewWnd->CreateControl(L"MsTscAx.MsTscAx", nullptr,
+                    WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+                    rectFullWallToWall, this, 2000 + nSelectedPort);
+
+                if (bCreated)
+                {
+                    printf("[LAUNCHER] CreateControl completed successfully wall-to-wall.\n");
+
+                    m_mapSessions.SetAt(hClickedItem, pNewWnd);
+                    m_pActiveRdpWnd = pNewWnd;
+
+                    // Cache structural properties for our safe delayed initialization thread
+                    m_hPendingSelectedNode = hClickedItem;
+                    m_nPendingSelectedPort = nSelectedPort;
+                    m_rectPendingZone = rectFullWallToWall;
+
+                    // Fire up the 10ms async delay worker timer
+                    this->SetTimer(IDC_LAUNCH_DELAY_TIMER, 10, nullptr);
+                }
+                else
+                {
+                    printf("[LAUNCHER] ERROR: CreateControl failed!\n");
+                    delete pNewWnd;
+                }
+            }
+            else
+            {
+                printf("[DOUBLE-CLICK] Ignored. Session already open. Use Single-Click to look at it.\n");
+            }
+        }
+    }
 }

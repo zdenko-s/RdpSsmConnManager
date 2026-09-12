@@ -33,7 +33,8 @@ protected:
     afx_msg void OnMouseMove(UINT nFlags, CPoint point);
     afx_msg BOOL OnSetCursor(CWnd* pWnd, UINT nHitTest, UINT message);
     afx_msg LRESULT OnPostInitializeRdp(WPARAM wParam, LPARAM lParam);
-
+    afx_msg void OnNMClickTreeRdg(NMHDR* pNMHDR, LRESULT* pResult);
+    afx_msg void OnNMDblclkTreeRdg(NMHDR* pNMHDR, LRESULT* pResult);
     void HandleRemoteLogoff(HTREEITEM hDeadKey, CWnd* pDeadWnd);
 
     DECLARE_MESSAGE_MAP()

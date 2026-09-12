@@ -7,6 +7,7 @@
 #define IDD_ABOUTBOX					100
 #define IDS_ABOUTBOX					101
 #define IDD_RDPSSMCONNMANAGER_DIALOG				102
+#define IDC_TREE_RDG                    11001
 
 // Next default values for new objects
 //
