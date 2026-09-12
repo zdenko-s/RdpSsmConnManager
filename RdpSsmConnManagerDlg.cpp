@@ -16,6 +16,8 @@ BEGIN_MESSAGE_MAP(CRdpSsmConnManagerDlg, CDialogEx)
     ON_WM_MOUSEMOVE()
     ON_WM_SETCURSOR()
     ON_NOTIFY(TVN_SELCHANGED, 1001, &CRdpSsmConnManagerDlg::OnTvnSelchangedTreeRdg)
+    //ON_WM_NCRBUTTONUP()
+    ON_WM_CONTEXTMENU()
 END_MESSAGE_MAP()
 
 
@@ -469,12 +471,14 @@ void CRdpSsmConnManagerDlg::RearrangeControls(int cx, int cy)
             {
                 if (pWnd == m_pActiveRdpWnd)
                 {
+                    // Stretch the active window to perfectly fit the resized container
                     pWnd->MoveWindow(nRdpLeft, 10, nRdpWidth, nRdpHeight);
                 }
                 else
                 {
-                    // Preserves background off-screen alignment
-                    pWnd->MoveWindow(-20000, 10, nRdpWidth, nRdpHeight);
+                    // Preserves background off-screen alignment at -32000 
+                    // and updates its width/height so it's ready when switched back
+                    pWnd->MoveWindow(-32000, -32000, nRdpWidth, nRdpHeight);
                 }
             }
         }
@@ -551,4 +555,160 @@ BOOL CRdpSsmConnManagerDlg::OnSetCursor(CWnd* pWnd, UINT nHitTest, UINT message)
     }
 
     return CDialogEx::OnSetCursor(pWnd, nHitTest, message);
+}
+
+/*
+void CRdpSsmConnManagerDlg::OnNcRButtonUp(UINT nHitTest, CPoint point) {
+    if (nHitTest == HTCAPTION) {
+        if (m_mapSessions.IsEmpty()) return;
+
+        CMenu popMenu;
+        popMenu.CreatePopupMenu();
+
+        HTREEITEM hKeyItem = NULL;  // Matching your map's KEY type
+        CWnd* pValueWnd = nullptr;  // Matching your map's VALUE type
+        POSITION pos = m_mapSessions.GetStartPosition();
+
+        UINT menuID = IDM_SWITCH_SESSIONS_START;
+
+        while (pos != NULL && menuID <= IDM_SWITCH_SESSIONS_END) {
+            m_mapSessions.GetNextAssoc(pos, hKeyItem, pValueWnd);
+
+            // Fetch the human-readable server name string directly from the tree node
+            CString sServerName = m_wndTree.GetItemText(hKeyItem);
+
+            UINT flags = MF_STRING;
+            if (pValueWnd == m_pActiveRdpWnd) {
+                flags |= MF_CHECKED;
+            }
+
+            popMenu.AppendMenu(flags, menuID, sServerName);
+            menuID++;
+        }
+
+        popMenu.TrackPopupMenu(TPM_LEFTALIGN | TPM_RIGHTBUTTON, point.x, point.y, this);
+        return;
+    }
+
+    CDialogEx::OnNcRButtonUp(nHitTest, point);
+}
+*/
+
+BOOL CRdpSsmConnManagerDlg::OnCommand(WPARAM wParam, LPARAM lParam) {
+    UINT nID = LOWORD(wParam);
+
+    if (nID >= IDM_SWITCH_SESSIONS_START && nID <= IDM_SWITCH_SESSIONS_END) {
+        UINT targetIndex = nID - IDM_SWITCH_SESSIONS_START;
+
+        if (!m_mapSessions.IsEmpty()) {
+            HTREEITEM hKeyItem = NULL;
+            CWnd* pValueWnd = nullptr;
+            POSITION pos = m_mapSessions.GetStartPosition();
+
+            UINT currentIndex = 0;
+            bool bFound = false;
+
+            while (pos != NULL) {
+                m_mapSessions.GetNextAssoc(pos, hKeyItem, pValueWnd);
+
+                if (currentIndex == targetIndex) {
+                    bFound = true;
+                    break;
+                }
+                currentIndex++;
+            }
+
+            if (bFound && pValueWnd != nullptr && pValueWnd != m_pActiveRdpWnd) {
+                CRect rectRdpPane;
+
+                if (m_pActiveRdpWnd != nullptr) {
+                    // 1. Get the precise right-side screen coordinates from your current active window
+                    m_pActiveRdpWnd->GetWindowRect(&rectRdpPane);
+                    ScreenToClient(&rectRdpPane);
+
+                    // 2. Teleport the current active window far away to -32000 so it doesn't disconnect
+                    m_pActiveRdpWnd->SetWindowPos(NULL, -32000, -32000, 0, 0, SWP_NOZORDER | SWP_NOSIZE);
+                }
+                else {
+                    // Fallback for the first session setup:
+                    // Take up the entire right side of the dialog, starting exactly where the tree ends
+                    GetClientRect(&rectRdpPane);
+                    CRect rectTree;
+                    m_wndTree.GetWindowRect(&rectTree);
+                    ScreenToClient(&rectTree);
+
+                    // The left side of the RDP pane is the right side of the tree + a small margin
+                    rectRdpPane.left = rectTree.right + 5;
+                }
+
+                // 3. Teleport your target background window back to the active display panel coordinates
+                pValueWnd->SetWindowPos(NULL, rectRdpPane.left, rectRdpPane.top, 0, 0, SWP_NOZORDER | SWP_NOSIZE);
+
+                // 4. Update your active variable pointer tracker
+                m_pActiveRdpWnd = pValueWnd;
+
+                // 5. Update the left side selection bar
+                if (hKeyItem != NULL) {
+                    m_wndTree.SelectItem(hKeyItem);
+                    m_wndTree.EnsureVisible(hKeyItem);
+                }
+            }
+        }
+        return TRUE;
+    }
+
+    return CDialogEx::OnCommand(wParam, lParam);
+}
+
+void CRdpSsmConnManagerDlg::OnContextMenu(CWnd* pWnd, CPoint point)
+{
+    // 1. Determine exactly what region of the dialog window was clicked
+    // Convert screen cursor points back to window tracking points
+    CPoint clientPt = point;
+    ScreenToClient(&clientPt);
+
+    // Check if the click coordinates hit the native Window Title Bar / Caption area
+    auto nHitTest = SendMessage(WM_NCHITTEST, 0, MAKELPARAM(point.x, point.y));
+
+    if (nHitTest == HTCAPTION)
+    {
+        // If no background tunnels are running, do nothing (or fallback to standard menu)
+        if (m_mapSessions.IsEmpty()) return;
+
+        CMenu popMenu;
+        popMenu.CreatePopupMenu(); //
+
+        HTREEITEM hKeyItem = NULL;
+        CWnd* pValueWnd = nullptr;
+        POSITION pos = m_mapSessions.GetStartPosition();
+
+        UINT menuID = IDM_SWITCH_SESSIONS_START;
+
+        // Populate your open background tunnels inside your CMap
+        while (pos != NULL && menuID <= IDM_SWITCH_SESSIONS_END)
+        {
+            m_mapSessions.GetNextAssoc(pos, hKeyItem, pValueWnd);
+
+            // Fetch the server name dynamically from your tree using the key handle
+            CString sServerName = m_wndTree.GetItemText(hKeyItem);
+
+            UINT flags = MF_STRING;
+            // Place a checkmark next to the active view pane
+            if (pValueWnd == m_pActiveRdpWnd)
+            {
+                flags |= MF_CHECKED;
+            }
+
+            popMenu.AppendMenu(flags, menuID, sServerName); //
+            menuID++;
+        }
+
+        // 2. Display your custom view switcher directly under the user's cursor
+        popMenu.TrackPopupMenu(TPM_LEFTALIGN | TPM_RIGHTBUTTON, point.x, point.y, this); //
+
+        return; // <-- CRITICAL: Stops message routing so the default System Menu is BLOCKED
+    }
+
+    // Pass right-clicks on other sections (like inside the tree) to the baseline default handler
+    CDialogEx::OnContextMenu(pWnd, point);
 }

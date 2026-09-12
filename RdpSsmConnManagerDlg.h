@@ -1,6 +1,9 @@
 #pragma once
 #include <afxtempl.h>
 
+#define IDM_SWITCH_SESSIONS_START   40100
+#define IDM_SWITCH_SESSIONS_END     40120  // Supports up to 20 open sessions
+
 class CRdpSsmConnManagerDlg : public CDialogEx
 {
 public:
@@ -22,6 +25,9 @@ protected:
     afx_msg void OnLButtonUp(UINT nFlags, CPoint point);
     afx_msg void OnMouseMove(UINT nFlags, CPoint point);
     afx_msg BOOL OnSetCursor(CWnd* pWnd, UINT nHitTest, UINT message);
+    BOOL OnCommand(WPARAM wParam, LPARAM lParam);
+    //afx_msg void OnNcRButtonUp(UINT nHitTest, CPoint point);
+    afx_msg void OnContextMenu(CWnd* pWnd, CPoint point);
 
     DECLARE_MESSAGE_MAP()
 
@@ -40,4 +46,5 @@ private:
     void LoadRdgFile(const CString& strPath);
     CWnd* InitializeRdpControl(HWND hwndParent, const CRect& rect, int port);
     void RearrangeControls(int cx, int cy); // Helper to consolidate layout positions
+    void SyncTreeSelection(const CString& serverName);
 };
