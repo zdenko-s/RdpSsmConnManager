@@ -20,19 +20,20 @@ protected:
     afx_msg void OnSize(UINT nType, int cx, int cy);
     afx_msg void OnTvnSelchangedTreeRdg(NMHDR* pNMHDR, LRESULT* pResult);
 
-    // NEW: Mouse capture events for tracking the custom divider line
+    // Mouse capture events for tracking the custom divider line
     afx_msg void OnLButtonDown(UINT nFlags, CPoint point);
     afx_msg void OnLButtonUp(UINT nFlags, CPoint point);
-    afx_msg void OnMouseMove(UINT nFlags, CPoint point);
-    afx_msg BOOL OnSetCursor(CWnd* pWnd, UINT nHitTest, UINT message);
     BOOL OnCommand(WPARAM wParam, LPARAM lParam);
     //afx_msg void OnNcRButtonUp(UINT nHitTest, CPoint point);
     afx_msg void OnContextMenu(CWnd* pWnd, CPoint point);
 
     // Add the handler signature block for RDP event ID 4 (OnDisconnected)
     afx_msg void OnRdpDisconnected(UINT nID, long discReason);
-
     afx_msg void OnTimer(UINT_PTR nIDEvent);
+    afx_msg void OnMouseMove(UINT nFlags, CPoint point);
+    afx_msg BOOL OnSetCursor(CWnd* pWnd, UINT nHitTest, UINT message);
+    afx_msg LRESULT OnPostInitializeRdp(WPARAM wParam, LPARAM lParam);
+
     void HandleRemoteLogoff(HTREEITEM hDeadKey, CWnd* pDeadWnd);
 
     DECLARE_MESSAGE_MAP()
@@ -53,4 +54,16 @@ private:
     CWnd* InitializeRdpControl(HWND hwndParent, const CRect& rect, int port);
     void RearrangeControls(int cx, int cy); // Helper to consolidate layout positions
     void SyncTreeSelection(const CString& serverName);
+
+    // Inside CRdpSsmConnManagerDlg class definition variables:
+private:
+    bool      m_bTreeVisible = true;
+    bool      m_bIsConnecting = false;
+    HTREEITEM m_hPendingSelectedNode = NULL;
+    int       m_nPendingSelectedPort = 0;
+    CRect     m_rectPendingZone;
+
+
+    enum { IDC_LAUNCH_DELAY_TIMER = 32500 }; // Unique ID for our 10ms kickstarter
+
 };

@@ -8,8 +8,27 @@
 #define new DEBUG_NEW
 #endif
 
+#include <initguid.h>
+
+// Native GUID for IMsRdpClientNonScriptable5
+DEFINE_GUID(IID_IMsRdpClientNonScriptable5, 0x4f42c070, 0x50d5, 0x4700, 0x99, 0x93, 0x27, 0x0b, 0x20, 0x14, 0x1f, 0x2a);
+
+// Define the interface struct manually if your Windows SDK header lacks it
+MIDL_INTERFACE("4f42c070-50d5-4700-9993-270b20141f2a")
+IMsRdpClientNonScriptable5 : public IUnknown
+{
+public:
+    virtual HRESULT STDMETHODCALLTYPE GetPropertyByName(BSTR, VARIANT*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE PutPropertyByName(BSTR, VARIANT*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE NotifySizeChange(void) = 0; // Legacy
+    virtual HRESULT STDMETHODCALLTYPE UpdateSessionDisplaySettings(void) = 0; // The Holy Grail
+};
+
+
+
 #define IDC_RDP_CTRL_START   20000
 #define IDC_RDP_CTRL_END     20050 // Supports up to 50 concurrent sessions
+#define WM_POST_INITIALIZE_RDP    (WM_USER + 102)
 
 BEGIN_MESSAGE_MAP(CRdpSsmConnManagerDlg, CDialogEx)
     ON_WM_PAINT()
@@ -19,9 +38,12 @@ BEGIN_MESSAGE_MAP(CRdpSsmConnManagerDlg, CDialogEx)
     ON_WM_MOUSEMOVE()
     ON_WM_SETCURSOR()
     ON_NOTIFY(TVN_SELCHANGED, 1001, &CRdpSsmConnManagerDlg::OnTvnSelchangedTreeRdg)
-    //ON_WM_NCRBUTTONUP()
     ON_WM_CONTEXTMENU()
     ON_WM_TIMER()
+    ON_WM_SETCURSOR()
+    ON_WM_MOUSEMOVE()
+    ON_MESSAGE(WM_POST_INITIALIZE_RDP, &CRdpSsmConnManagerDlg::OnPostInitializeRdp)
+
 END_MESSAGE_MAP()
 
 
@@ -320,39 +342,24 @@ void CRdpSsmConnManagerDlg::LoadRdgFile(const CString& strPath)
 CWnd* CRdpSsmConnManagerDlg::InitializeRdpControl(HWND hwndParent, const CRect& rect, int port)
 {
     CWnd* pWnd = CWnd::FromHandle(hwndParent);
-    if (!pWnd)
-        return nullptr;
+    if (!pWnd) return nullptr;
 
     LPUNKNOWN pUnk = pWnd->GetControlUnknown();
-    if (pUnk == nullptr)
-        return nullptr;
+    if (pUnk == nullptr) return nullptr;
 
     CComDispatchDriver rdpDisp(pUnk);
+
+    // Enforce your mandatory localhost address routing for AWS SSM tunnels
     CComVariant varServer(L"127.0.0.1");
     rdpDisp.PutPropertyByName(L"Server", &varServer);
 
-    // --- FIX: Eliminate hardcoded 1280x800 values. ---
-    // Natively query the target container's current real-time dimension properties.
-    // Whether minimized, regular, or maximized, it boots at an exact 1:1 pixel match!
-    CComVariant varWidth(rect.Width());
-    CComVariant varHeight(rect.Height());
-    rdpDisp.PutPropertyByName(L"DesktopWidth", &varWidth);
-    rdpDisp.PutPropertyByName(L"DesktopHeight", &varHeight);
-
-    printf("[PARSER] Requesting initialization canvas resolution: %dx%d\n", rect.Width(), rect.Height());
-
+    // Fetch the correct advanced settings block
     CComVariant varAdvanced;
-    HRESULT hr = rdpDisp.GetPropertyByName(L"AdvancedSettings9", &varAdvanced);
-    if (FAILED(hr) || varAdvanced.vt != VT_DISPATCH || varAdvanced.pdispVal == nullptr)
-    {
-        rdpDisp.GetPropertyByName(L"AdvancedSettings", &varAdvanced);
-    }
-
-    if (varAdvanced.vt == VT_DISPATCH && varAdvanced.pdispVal != nullptr)
+    if (SUCCEEDED(rdpDisp.GetPropertyByName(L"AdvancedSettings7", &varAdvanced)) && varAdvanced.vt == VT_DISPATCH)
     {
         CComDispatchDriver advDisp(varAdvanced.pdispVal);
         CComVariant varPort(port);
-        CComVariant varSmartSize(VARIANT_TRUE);
+        CComVariant varSmartSize(VARIANT_TRUE); // <-- Forces wall-to-wall canvas mapping natively
         CComVariant varAuthLevel(0);
         CComVariant varCredSSP(VARIANT_TRUE);
 
@@ -385,57 +392,74 @@ void CRdpSsmConnManagerDlg::OnTvnSelchangedTreeRdg(NMHDR* pNMHDR, LRESULT* pResu
 
             CRect rectClient;
             GetClientRect(&rectClient);
-            // This is our visible RDP canvas zone on the right side of the split screen
-            CRect rectVisibleZone(260, 10, rectClient.Width() - 10, rectClient.Height() - 10);
 
-            // 1. SLIDE OFF-SCREEN: Instead of hiding, slide the currently active window completely out of bounds
+            // 1. PARK PREVIOUS SESSION: Teleport old active windows out of view
             if (m_pActiveRdpWnd != nullptr)
             {
-                // Moving it to -20000 keeps it fully alive and painting in memory, but hidden to the user
-                m_pActiveRdpWnd->MoveWindow(-20000, 10, rectVisibleZone.Width(), rectVisibleZone.Height());
+                m_pActiveRdpWnd->SetWindowPos(NULL, -32000, -32000, 0, 0, SWP_NOZORDER | SWP_NOSIZE);
                 m_pActiveRdpWnd = nullptr;
             }
 
             CWnd* pTargetRdpWnd = nullptr;
 
-            // 2. SESSION LOOK-UP
+            // 2. LOGICAL BRANCH A: The session is already open and running in the background!
             if (m_mapSessions.Lookup(hSelected, pTargetRdpWnd) && pTargetRdpWnd != nullptr)
             {
                 printf("[SESSION INFRA] Found active background session canvas. Re-centering viewport instantly...\n");
+                m_bTreeVisible = false;
                 m_pActiveRdpWnd = pTargetRdpWnd;
+                RearrangeControls(rectClient.Width(), rectClient.Height());
             }
+            // 3. LOGICAL BRANCH B: This is a brand new session activation request!
             else
             {
                 printf("[SESSION INFRA] Spawning fresh isolated session instance container...\n");
 
+                // --- STEP A: COLLAPSE TREE PANEL BEFORE CREATION ---
+                // This forces the tree off-screen instantly, freeing up 100% application width
+                m_bTreeVisible = false;
+
+                // Temporarily bypass the connection safety flag so RearrangeControls can scale the layout
+                m_bIsConnecting = false;
+                RearrangeControls(rectClient.Width(), rectClient.Height());
+
+                // --- STEP B: COMPUTE TRUE MAXIMUM WALL-TO-WALL CANVAS BOUNDS ---
+                int nRdpLeft = 5; // Left edge margin since tree is now collapsed
+                int nRdpWidth = rectClient.Width() - nRdpLeft - 10;
+                int nRdpHeight = rectClient.Height() - 20;
+
+                CRect rectFullWallToWall(nRdpLeft, 10, nRdpLeft + nRdpWidth, 10 + nRdpHeight);
+                printf("[LAUNCHER] Creating control container directly wall-to-wall: Width=%d, Height=%d\n",
+                    rectFullWallToWall.Width(), rectFullWallToWall.Height());
+
                 CWnd* pNewWnd = new CWnd();
-                // FIX: Instantiate the control visible natively right from the start
+
+                // Create the control container shell natively at the full, maximum width bounds
                 BOOL bCreated = pNewWnd->CreateControl(L"MsTscAx.MsTscAx", nullptr,
                     WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-                    rectVisibleZone, this, 2000 + nSelectedPort);
+                    rectFullWallToWall, this, 2000 + nSelectedPort);
 
                 if (bCreated)
                 {
-                    InitializeRdpControl(pNewWnd->GetSafeHwnd(), rectVisibleZone, nSelectedPort);
+                    printf("[LAUNCHER] CreateControl completed successfully at full canvas size.\n");
+
                     m_mapSessions.SetAt(hSelected, pNewWnd);
                     m_pActiveRdpWnd = pNewWnd;
 
-                    SetTimer(IDC_RDP_CTRL_START, 1000, nullptr); // Triggers once every 1000ms (1 second)
+                    // Cache details for our delayed asynchronous worker tick
+                    m_hPendingSelectedNode = hSelected;
+                    m_nPendingSelectedPort = nSelectedPort;
+                    m_rectPendingZone = rectFullWallToWall;
+
+                    // Start the 10ms single-shot async delay timer to safely clear out of the tree event thread
+                    this->SetTimer(IDC_LAUNCH_DELAY_TIMER, 10, nullptr);
+                    printf("[LAUNCHER] Delayed kickstarter timer queued successfully.\n");
                 }
                 else
                 {
-                    printf("[ERROR] Allocation failure creating multi-session interface container.\n");
+                    printf("[LAUNCHER] ERROR: CreateControl failed to instantiate ActiveX control!\n");
                     delete pNewWnd;
                 }
-            }
-
-            // 3. SLIDE ON-SCREEN: Snap the selected session window directly back into the visible canvas zone
-            if (m_pActiveRdpWnd != nullptr)
-            {
-                m_pActiveRdpWnd->MoveWindow(rectVisibleZone.left, rectVisibleZone.top,
-                    rectVisibleZone.Width(), rectVisibleZone.Height());
-                m_pActiveRdpWnd->Invalidate();
-                m_pActiveRdpWnd->UpdateWindow();
             }
         }
     }
@@ -452,20 +476,25 @@ void CRdpSsmConnManagerDlg::OnSize(UINT nType, int cx, int cy)
 
 void CRdpSsmConnManagerDlg::RearrangeControls(int cx, int cy)
 {
-    // Ensure window structures are fully online before attempting adjustments
     if (!m_wndTree.GetSafeHwnd()) return;
 
     // Rescale left tree panel
-    m_wndTree.MoveWindow(10, 10, m_nTreeWidth, cy - 20);
-
-    // Calculate remaining right-side canvas coordinate anchor points
+    int nTreeX = 0;
     int nRdpLeft = 10 + m_nTreeWidth + m_nSplitterWidth;
+
+    if (!m_bTreeVisible)
+    {
+        nTreeX = -m_nTreeWidth - 10;
+        nRdpLeft = 5;
+    }
+
+    m_wndTree.MoveWindow(nTreeX, 10, m_nTreeWidth, cy - 20);
+
     int nRdpWidth = cx - nRdpLeft - 10;
     int nRdpHeight = cy - 20;
 
     if (nRdpWidth <= 0 || nRdpHeight <= 0) return;
 
-    // Loop and apply the updated dimensions to all running session containers
     if (m_mapSessions.GetCount() > 0)
     {
         POSITION pos = m_mapSessions.GetStartPosition();
@@ -477,15 +506,18 @@ void CRdpSsmConnManagerDlg::RearrangeControls(int cx, int cy)
 
             if (pWnd && pWnd->GetSafeHwnd())
             {
+                // Freeze layout movements during the initial handshake step
+                if (m_bIsConnecting && pWnd == m_pActiveRdpWnd)
+                {
+                    continue;
+                }
+
                 if (pWnd == m_pActiveRdpWnd)
                 {
-                    // Stretch the active window to perfectly fit the resized container
                     pWnd->MoveWindow(nRdpLeft, 10, nRdpWidth, nRdpHeight);
                 }
                 else
                 {
-                    // Preserves background off-screen alignment at -32000 
-                    // and updates its width/height so it's ready when switched back
                     pWnd->MoveWindow(-32000, -32000, nRdpWidth, nRdpHeight);
                 }
             }
@@ -528,43 +560,54 @@ void CRdpSsmConnManagerDlg::OnLButtonUp(UINT nFlags, CPoint point)
 
 void CRdpSsmConnManagerDlg::OnMouseMove(UINT nFlags, CPoint point)
 {
-    if (m_bDraggingSplitter)
+    if (m_bIsConnecting)
     {
-        CRect rectClient;
-        GetClientRect(&rectClient);
-
-        // Keep resizing boundaries within practical human dimensions
-        if (point.x > 100 && point.x < (rectClient.Width() - 200))
-        {
-            m_nTreeWidth = point.x - 10; // Calculate new tree dimension offset
-
-            // Re-render and stretch the layout boxes immediately
-            RearrangeControls(rectClient.Width(), rectClient.Height());
-        }
+        CDialogEx::OnMouseMove(nFlags, point);
+        return;
     }
 
+    CRect rectClient;
+    GetClientRect(&rectClient);
+
+    if (m_bTreeVisible && point.x > (m_nTreeWidth + 30))
+    {
+        m_bTreeVisible = false;
+        RearrangeControls(rectClient.Width(), rectClient.Height());
+    }
     CDialogEx::OnMouseMove(nFlags, point);
 }
 
 BOOL CRdpSsmConnManagerDlg::OnSetCursor(CWnd* pWnd, UINT nHitTest, UINT message)
 {
-    CPoint point;
-    ::GetCursorPos(&point);
-    ScreenToClient(&point);
-
-    int nSplitterLeft = 10 + m_nTreeWidth;
-    int nSplitterRight = nSplitterLeft + m_nSplitterWidth;
-
-    // Change system arrow cursor into a East/West resize pointer when hovering over the splitter line
-    if ((point.x >= nSplitterLeft && point.x <= nSplitterRight) || m_bDraggingSplitter)
+    // --- ADD THIS DEADLOCK PROTECTION GATE ---
+    // If an unmanaged local loopback socket handshake is actively running,
+    // immediately exit and touch nothing to ensure the message queue remains clear!
+    if (m_bIsConnecting)
     {
-        ::SetCursor(::LoadCursor(nullptr, IDC_SIZEWE));
-        return TRUE; // Intercept event routing
+        return CDialogEx::OnSetCursor(pWnd, nHitTest, message);
+    }
+
+    // Your existing mouse-hover auto-hide calculation rules
+    CPoint ptCursor;
+    GetCursorPos(&ptCursor);
+    ScreenToClient(&ptCursor);
+
+    CRect rectClient;
+    GetClientRect(&rectClient);
+
+    if (!m_bTreeVisible && ptCursor.x <= 5 && ptCursor.y >= 0 && ptCursor.y <= rectClient.Height())
+    {
+        m_bTreeVisible = true;
+        RearrangeControls(rectClient.Width(), rectClient.Height());
+    }
+    else if (m_bTreeVisible && ptCursor.x > (m_nTreeWidth + 30))
+    {
+        m_bTreeVisible = false;
+        RearrangeControls(rectClient.Width(), rectClient.Height());
     }
 
     return CDialogEx::OnSetCursor(pWnd, nHitTest, message);
 }
-
 
 BOOL CRdpSsmConnManagerDlg::OnCommand(WPARAM wParam, LPARAM lParam) {
     UINT nID = LOWORD(wParam);
@@ -745,73 +788,69 @@ void CRdpSsmConnManagerDlg::OnRdpDisconnected(UINT nID, long discReason)
 
 void CRdpSsmConnManagerDlg::OnTimer(UINT_PTR nIDEvent)
 {
+    if (nIDEvent == IDC_LAUNCH_DELAY_TIMER)
+    {
+        this->KillTimer(IDC_LAUNCH_DELAY_TIMER);
+        printf("[DELAY-TIMER] UI Thread loop is clean. Launching RDP network channel...\n");
+
+        CWnd* pTargetWnd = nullptr;
+        if (m_mapSessions.Lookup(m_hPendingSelectedNode, pTargetWnd) && pTargetWnd != nullptr)
+        {
+            m_bIsConnecting = true;
+
+            this->KillTimer(IDC_RDP_CTRL_START);
+            this->SetTimer(IDC_RDP_CTRL_START, 1000, nullptr);
+
+            InitializeRdpControl(pTargetWnd->GetSafeHwnd(), m_rectPendingZone, m_nPendingSelectedPort);
+        }
+        return;
+    }
+
     if (nIDEvent == IDC_RDP_CTRL_START)
     {
-        printf("[RDP-TIMER] Tick fired. Active sessions map count: %d\n", (int)m_mapSessions.GetCount());
-
         if (m_mapSessions.IsEmpty())
         {
-            printf("[RDP-TIMER] Map is completely empty. Disabling timer.\n");
-            KillTimer(IDC_RDP_CTRL_START);
+            this->KillTimer(IDC_RDP_CTRL_START);
             return;
         }
 
+        HTREEITEM hKeyItem = NULL;
+        CWnd* pWnd = nullptr;
         POSITION pos = m_mapSessions.GetStartPosition();
 
         while (pos != nullptr)
         {
-            HTREEITEM hKeyItem = NULL;  // Will receive the actual map key
-            CWnd* pWnd = nullptr;       // Will receive the window pointer value
-
-            // Standard MFC CMap traversal moves the 'pos' pointer forward automatically
             m_mapSessions.GetNextAssoc(pos, hKeyItem, pWnd);
 
             if (pWnd && ::IsWindow(pWnd->GetSafeHwnd()))
             {
-                CString sServerName = m_wndTree.GetItemText(hKeyItem);
-                printf("[RDP-TIMER] Evaluating Server: '%s' (HWND: 0x%p)\n", (LPCSTR)CT2A(sServerName), pWnd->GetSafeHwnd());
-
                 LPUNKNOWN pUnk = pWnd->GetControlUnknown();
-                if (pUnk == nullptr)
-                {
-                    printf("[RDP-TIMER] WARNING: GetControlUnknown() returned NULL for '%s'. Skipping.\n", (LPCSTR)CT2A(sServerName));
-                    continue;
-                }
+                if (pUnk == nullptr) continue;
 
                 CComDispatchDriver rdpDisp(pUnk);
                 CComVariant varConnected;
 
-                HRESULT hr = rdpDisp.GetPropertyByName(L"Connected", &varConnected);
-                if (FAILED(hr))
-                {
-                    printf("[RDP-TIMER] ERROR: Failed to get 'Connected' property for '%s'. HRESULT: 0x%08X\n", (LPCSTR)CT2A(sServerName), hr);
-                    continue;
-                }
-
-                printf("[RDP-TIMER] '%s' raw Variant VT type: %d\n", (LPCSTR)CT2A(sServerName), varConnected.vt);
+                if (FAILED(rdpDisp.GetPropertyByName(L"Connected", &varConnected))) continue;
 
                 long nConnectedState = -1;
-                hr = VariantChangeType(&varConnected, &varConnected, 0, VT_I4);
-                if (SUCCEEDED(hr))
+                if (SUCCEEDED(VariantChangeType(&varConnected, &varConnected, 0, VT_I4)))
                 {
                     nConnectedState = varConnected.lVal;
-                    printf("[RDP-TIMER] '%s' evaluated connection state value: %ld\n", (LPCSTR)CT2A(sServerName), nConnectedState);
-                }
-                else
-                {
-                    printf("[RDP-TIMER] ERROR: VariantChangeType failed for '%s'. HRESULT: 0x%08X\n", (LPCSTR)CT2A(sServerName), hr);
                 }
 
-                // If connection state registers as 0, the remote server logged off!
+                // Connection is established and stable! Release safety layout lock flag
+                if (nConnectedState == 1 && m_bIsConnecting)
+                {
+                    printf("[RDP-TIMER] !!! CONNECTION LIVE AND STABLE !!!\n");
+                    m_bIsConnecting = false;
+                }
+
                 if (nConnectedState == 0)
                 {
-                    printf("[RDP-TIMER] !!! MATCH FOUND !!! Server '%s' reports disconnected. Triggering eviction...\n", (LPCSTR)CT2A(sServerName));
+                    if (m_bIsConnecting) continue; // Waiting on handshake, ignore state 0
 
-                    // Trigger your safe cleanup handler
+                    printf("[RDP-TIMER] !!! DISCONNECT DETECTED !!! Evicting...\n");
                     HandleRemoteLogoff(hKeyItem, pWnd);
-
-                    // CRITICAL: Exit immediately! Modifying the map during iteration invalidates 'pos'
-                    // Returning here lets the next 1-second timer tick evaluate any remaining windows safely
                     return;
                 }
             }
@@ -866,4 +905,26 @@ void CRdpSsmConnManagerDlg::HandleRemoteLogoff(HTREEITEM hDeadKey, CWnd* pDeadWn
 
     // 5. Force tree layout engine redraw to update colors instantly
     m_wndTree.Invalidate();
+}
+
+LRESULT CRdpSsmConnManagerDlg::OnPostInitializeRdp(WPARAM wParam, LPARAM lParam)
+{
+    HTREEITEM hTargetItem = (HTREEITEM)wParam;
+    int nPort = (int)lParam;
+
+    CWnd* pTargetWnd = nullptr;
+    if (m_mapSessions.Lookup(hTargetItem, pTargetWnd) && pTargetWnd != nullptr)
+    {
+        CRect rectClient;
+        GetClientRect(&rectClient);
+
+        int nRdpLeft = 10 + m_nTreeWidth + m_nSplitterWidth;
+        CRect rectVisibleZone(nRdpLeft, 10, rectClient.Width() - 10, rectClient.Height() - 20);
+
+        printf("[ASYNC-THREAD] UI thread clear. Launching InitializeRdpControl safely...\n");
+
+        // Handshake the advanced properties using baseline dimensions to ensure validation clears
+        InitializeRdpControl(pTargetWnd->GetSafeHwnd(), rectVisibleZone, nPort);
+    }
+    return 0;
 }

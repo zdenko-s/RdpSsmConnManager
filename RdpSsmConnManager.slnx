@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="RdpSsmConnManager.vcxproj" />
+  <Project Path="RdpSsmConnManager.vcxproj" Id="183fcbeb-5389-16c8-e201-9e6eaf7e27e8" />
 </Solution>
