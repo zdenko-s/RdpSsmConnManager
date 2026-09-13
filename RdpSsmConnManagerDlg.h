@@ -1,10 +1,20 @@
 #pragma once
 #include <afxtempl.h>
 
-#include "AwsSsmTunnelManager.h" 
+#include "MockAwsSsmTunnelManager.h"
+
+#include "IAwsSsmTunnel.h"
+#include "AwsExeSsmTunnel.h"
+#include <map>
+#include <memory>
 
 #define IDM_SWITCH_SESSIONS_START   40100
 #define IDM_SWITCH_SESSIONS_END     40120  // Supports up to 20 open sessions
+
+struct RdpSessionContext {
+    std::unique_ptr<IAwsSsmTunnel> ssmTunnel;
+    int localPort = 0;
+};
 
 class CRdpSsmConnManagerDlg : public CDialogEx
 {
@@ -43,6 +53,12 @@ protected:
     DECLARE_MESSAGE_MAP()
 
     HICON m_hIcon; // Icon handle storage wrapper
+
+    CString m_sCurrentAwsProfile = L"default"; // Tracks active choice
+    CArray<CString, CString&> m_arrAwsProfiles; // Locally cached profiles
+
+    void FetchAwsProfiles();
+    void UpdateTitleBarText();
 private:
     CTreeCtrl m_wndTree;
     CString   m_strRdgPath;
@@ -72,8 +88,13 @@ private:
     enum { IDC_LAUNCH_DELAY_TIMER = 32500 }; // Unique ID for our 10ms kickstarter
 
 	// AWS SSM Tunnel Manager instance for handling session tunnels
-    CAwsSsmTunnelManager m_awsTunnelMgr; // Decoupled manager module instance
+    CMockAwsSsmTunnelManager m_awsTunnelMgr; // Decoupled manager module instance
 
     // Recursive cleanup helper for application shutdown memory tracking
     void DeleteTreeItemDataRecursive(HTREEITEM hItem);
+
+	// Structure to hold SSM Tunnelsession context information
+    std::map<std::wstring, RdpSessionContext> m_activeSessions;
+    void OpenNewSession(const std::wstring& instanceId, const std::wstring& profile, const std::wstring& region);
+    void CloseSession(const std::wstring& instanceId);
 };

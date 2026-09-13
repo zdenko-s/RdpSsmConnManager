@@ -195,8 +195,11 @@
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="AwsSsmTunnelManager.h" />
+    <ClInclude Include="AwsExeSsmTunnel.h" />
+    <ClInclude Include="AwsSdkSsmTunnel.h" />
     <ClInclude Include="framework.h" />
+    <ClInclude Include="IAwsSsmTunnel.h" />
+    <ClInclude Include="MockAwsSsmTunnelManager.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="RdpSsmConnManager.h" />
     <ClInclude Include="RdpSsmConnManagerDlg.h" />
@@ -204,7 +207,9 @@
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="AwsSsmTunnelManager.cpp" />
+    <ClCompile Include="AwsExeSsmTunnel.cpp" />
+    <ClCompile Include="AwsSdkSsmTunnel.cpp" />
+    <ClCompile Include="MockAwsSsmTunnelManager.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>

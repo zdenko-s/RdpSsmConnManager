@@ -3,8 +3,8 @@
 #include "RdpSsmConnManager.h"
 #include "RdpSsmConnManagerDlg.h"
 #include "afxdialogex.h"
-
-#include "AwsSsmTunnelManager.h"
+#include <shlobj.h> // For SHGetKnownFolderPath
+#include <vector>
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -31,6 +31,10 @@ public:
 #define IDC_RDP_CTRL_START   20000
 #define IDC_RDP_CTRL_END     20050 // Supports up to 50 concurrent sessions
 #define WM_POST_INITIALIZE_RDP    (WM_USER + 102)
+
+// Helper command boundary IDs for dynamic menu routing
+#define IDM_AWS_PROFILES_BASE_ID  32000
+#define IDM_AWS_PROFILES_MAX_ID   32100
 
 BEGIN_MESSAGE_MAP(CRdpSsmConnManagerDlg, CDialogEx)
     ON_WM_PAINT()
@@ -68,6 +72,10 @@ CRdpSsmConnManagerDlg::CRdpSsmConnManagerDlg(CWnd* pParent /*=nullptr*/)
 BOOL CRdpSsmConnManagerDlg::OnInitDialog()
 {
     CDialogEx::OnInitDialog();
+
+    // Fetch local workspace configuration data profiles 
+    FetchAwsProfiles();
+    UpdateTitleBarText();
 
     if (::AllocConsole())
     {
@@ -676,7 +684,10 @@ void CRdpSsmConnManagerDlg::OnNMDblclkTreeRdg(NMHDR* pNMHDR, LRESULT* pResult)
 
                 // --- 2. CALL THE MOCK MODULE BYPASSING FIXED PORT REQUIREMENT ---
                 // The decoupled module evaluates the metadata tokens and populates the port mapping natively!
-                if (!m_awsTunnelMgr.StartSdkSsmTunnel(pTargetInfo->sRegion, pTargetInfo->sInstanceId, nDynamicAssignedPort))
+                std::wstring stdStrRegion(pTargetInfo->sRegion.GetString());
+                std::wstring stdStrInstanceId(pTargetInfo->sInstanceId.GetString());
+				std::wstring stdStrProfile(m_sCurrentAwsProfile.GetString());
+                if (!m_awsTunnelMgr.Open(stdStrProfile, stdStrRegion, stdStrInstanceId, nDynamicAssignedPort))
                 {
                     AfxMessageBox(_T("Mock setup failed to initialize parameter maps."));
                     return;
@@ -871,6 +882,18 @@ BOOL CRdpSsmConnManagerDlg::OnCommand(WPARAM wParam, LPARAM lParam) {
         return TRUE;
     }
 
+    // Dynamic processing route capturing the selected index target
+    if (nID >= IDM_AWS_PROFILES_BASE_ID && nID <= IDM_AWS_PROFILES_MAX_ID)
+    {
+        int clickedIndex = nID - IDM_AWS_PROFILES_BASE_ID;
+        if (clickedIndex < m_arrAwsProfiles.GetCount())
+        {
+            m_sCurrentAwsProfile = m_arrAwsProfiles.GetAt(clickedIndex);
+            UpdateTitleBarText(); // Instantly displays change on top layout boundaries
+            printf("[AWS-CONFIG] Switched execution profile to: '%s'\n", (LPCSTR)CT2A(m_sCurrentAwsProfile));
+        }
+        return TRUE;
+    }
     return CDialogEx::OnCommand(wParam, lParam);
 }
 
@@ -880,35 +903,53 @@ void CRdpSsmConnManagerDlg::OnContextMenu(CWnd* pWnd, CPoint point)
 
     if (nHitTest == HTCAPTION)
     {
-        printf("[RDP-MENU] Title bar right-clicked. Map has %d items.\n", (int)m_mapSessions.GetCount());
-
-        if (m_mapSessions.IsEmpty()) return;
-
         CMenu popMenu;
         popMenu.CreatePopupMenu();
 
-        HTREEITEM hKeyItem = NULL;
-        CWnd* pValueWnd = nullptr;
-        POSITION pos = m_mapSessions.GetStartPosition();
-
         UINT menuID = IDM_SWITCH_SESSIONS_START;
 
-        while (pos != NULL && menuID <= IDM_SWITCH_SESSIONS_END)
+        // 1. Session switcher injection sequence
+        if (!m_mapSessions.IsEmpty())
         {
-            m_mapSessions.GetNextAssoc(pos, hKeyItem, pValueWnd);
-            CString sServerName = m_wndTree.GetItemText(hKeyItem);
+            HTREEITEM hKeyItem = NULL;
+            CWnd* pValueWnd = nullptr;
+            POSITION pos = m_mapSessions.GetStartPosition();
 
-            printf("[RDP-MENU] Injecting item into switcher list menu: '%s' (ID: %u)\n", (LPCSTR)CT2A(sServerName), menuID);
-
-            UINT flags = MF_STRING;
-            if (pValueWnd == m_pActiveRdpWnd)
+            while (pos != NULL && menuID <= IDM_SWITCH_SESSIONS_END)
             {
+                m_mapSessions.GetNextAssoc(pos, hKeyItem, pValueWnd);
+                CString sServerName = m_wndTree.GetItemText(hKeyItem);
+
+                UINT flags = MF_STRING;
+                if (pValueWnd == m_pActiveRdpWnd) flags |= MF_CHECKED;
+
+                popMenu.AppendMenu(flags, menuID, sServerName);
+                menuID++;
+            }
+
+            popMenu.AppendMenu(MF_SEPARATOR);
+        }
+
+        // 2. Loop local profile cache to populate the dynamic submenu loop elements
+        CMenu profileSubMenu;
+        profileSubMenu.CreatePopupMenu();
+
+        for (int i = 0; i < m_arrAwsProfiles.GetCount(); ++i)
+        {
+            CString sProfName = m_arrAwsProfiles.GetAt(i);
+            UINT flags = MF_STRING;
+
+            if (sProfName == m_sCurrentAwsProfile) {
                 flags |= MF_CHECKED;
             }
 
-            popMenu.AppendMenu(flags, menuID, sServerName);
-            menuID++;
+            // Route dynamic offsets starting from base index range blocks
+            profileSubMenu.AppendMenu(flags, IDM_AWS_PROFILES_BASE_ID + i, sProfName);
         }
+
+        CString sMenuLabel;
+        sMenuLabel.Format(L"AWS Profile Config [Active: %s]", m_sCurrentAwsProfile.GetString());
+        popMenu.AppendMenu(MF_POPUP, (UINT_PTR)profileSubMenu.GetSafeHmenu(), sMenuLabel);
 
         popMenu.TrackPopupMenu(TPM_LEFTALIGN | TPM_RIGHTBUTTON, point.x, point.y, this);
         return;
@@ -1204,4 +1245,93 @@ LRESULT CRdpSsmConnManagerDlg::WindowProc(UINT message, WPARAM wParam, LPARAM lP
     }
 
     return CDialogEx::WindowProc(message, wParam, lParam);
+}
+
+void CRdpSsmConnManagerDlg::OpenNewSession(const std::wstring& instanceId, const std::wstring& profile, const std::wstring& region) {
+    RdpSessionContext context;
+    context.ssmTunnel = std::make_unique<AwsExeSsmTunnel>();
+
+    int allocatedPort = 0;
+    if (context.ssmTunnel->Open(profile, region, instanceId, allocatedPort)) {
+        context.localPort = allocatedPort;
+        m_activeSessions[instanceId] = std::move(context);
+    }
+    else {
+        ::AfxMessageBox(L"Failed to initiate secure AWS SSM connection tunnel container.");
+    }
+}
+
+void CRdpSsmConnManagerDlg::CloseSession(const std::wstring& instanceId) {
+    auto it = m_activeSessions.find(instanceId);
+    if (it != m_activeSessions.end()) {
+        m_activeSessions.erase(it); // Triggers destruction & background process cleanup automatically
+    }
+}
+
+void CRdpSsmConnManagerDlg::UpdateTitleBarText()
+{
+    CString sTitle;
+    sTitle.Format(L"RDP SSM Connection Manager [AWS Profile: %s]", m_sCurrentAwsProfile.GetString());
+    SetWindowText(sTitle);
+}
+
+void CRdpSsmConnManagerDlg::FetchAwsProfiles()
+{
+    m_arrAwsProfiles.RemoveAll();
+
+    // Always guarantee 'default' is present as the base fallback
+    m_arrAwsProfiles.Add(CString(L"default"));
+
+    // Resolve the native absolute %USERPROFILE% directory path safely
+    PWSTR pszHomePath = nullptr;
+    if (::SHGetKnownFolderPath(FOLDERID_Profile, KF_FLAG_DEFAULT, nullptr, &pszHomePath) == S_OK)
+    {
+        CString sConfigPath;
+        sConfigPath.Format(L"%s\\.aws\\config", pszHomePath);
+        ::CoTaskMemFree(pszHomePath); // Free allocation memory instantly
+
+        // Allocate a large buffer to hold the null-separated section names
+        const DWORD BUFFER_SIZE = 32768;
+        std::vector<wchar_t> buffer(BUFFER_SIZE, L'\0');
+
+        // Fetch all section names from the INI file natively
+        DWORD dwCopied = ::GetPrivateProfileSectionNamesW(buffer.data(), BUFFER_SIZE, sConfigPath.GetString());
+
+        if (dwCopied > 0)
+        {
+            wchar_t* pCurrentSection = buffer.data();
+
+            // GetPrivateProfileSectionNames returns a buffer of null-terminated strings, 
+            // ending with a final double-null character (\0\0).
+            while (*pCurrentSection != L'\0')
+            {
+                CString sSection(pCurrentSection);
+
+                // AWS named profiles look like: [profile my-profile-name]
+                // The default profile looks like: [default]
+                if (sSection == L"default")
+                {
+                    // Skip default since we already hardcoded it at index 0
+                    pCurrentSection += sSection.GetLength() + 1;
+                    continue;
+                }
+
+                if (sSection.Left(8).MakeLower() == L"profile ")
+                {
+                    CString sProfileName = sSection.Mid(8); // Strip out "profile "
+                    sProfileName.Trim();
+
+                    if (!sProfileName.IsEmpty())
+                    {
+                        m_arrAwsProfiles.Add(sProfileName);
+                    }
+                }
+
+                // Move pointer to the next section string in the buffer
+                pCurrentSection += sSection.GetLength() + 1;
+            }
+        }
+    }
+
+    printf("[AWS-CONFIG] Win32 API found and loaded %d total profiles.\n", (int)m_arrAwsProfiles.GetCount());
 }

@@ -1,6 +1,6 @@
 #pragma once
 
-#define _WIN32_WINNT 0x0502
+#define _WIN32_WINNT 0x0601
 #define VC_EXTRALEAN        
 
 #include <afxwin.h>         

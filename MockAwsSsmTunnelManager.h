@@ -1,5 +1,6 @@
 #pragma once
 #include <afxstr.h>
+#include "IAwsSsmTunnel.h"
 
 // Structural blueprint to track live AWS metadata per server leaf node
 struct AwsServerTargetInfo
@@ -9,16 +10,21 @@ struct AwsServerTargetInfo
     int     nLocalPort = 0;
 };
 
-class CAwsSsmTunnelManager
+class CMockAwsSsmTunnelManager : public IAwsSsmTunnel
 {
 public:
-    CAwsSsmTunnelManager() = default;
-    ~CAwsSsmTunnelManager() = default;
+    CMockAwsSsmTunnelManager() = default;
+    ~CMockAwsSsmTunnelManager() = default;
 
     // Disallow copying to keep handle management safe
-    CAwsSsmTunnelManager(const CAwsSsmTunnelManager&) = delete;
-    CAwsSsmTunnelManager& operator=(const CAwsSsmTunnelManager&) = delete;
+    CMockAwsSsmTunnelManager(const CMockAwsSsmTunnelManager&) = delete;
+    CMockAwsSsmTunnelManager& operator=(const CMockAwsSsmTunnelManager&) = delete;
 
     // Core method to execute the mock handshake sequence
-    bool StartSdkSsmTunnel(const CString& sRegion, const CString& sInstanceId, int& nOutLocalPort);
+    //bool StartSdkSsmTunnel(const CString& sRegion, const CString& sInstanceId, int& nOutLocalPort);
+    virtual bool Open(const std::wstring& awsProfile,
+        const std::wstring& awsRegion,
+        const std::wstring& instanceId,
+        int& outLocalPort) override;
+
 };
